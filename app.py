@@ -212,9 +212,11 @@ You previously worked on this task and moved it to Review. User has a follow-up 
 {system_prompt}
 
 ## Instructions:
-1. Read the context and User's question
-2. Respond helpfully by posting a comment: POST http://localhost:8080/api/tasks/{task_id}/comments
-3. Keep your response focused on what User asked
+1. Call start-work API: POST http://localhost:8080/api/tasks/{task_id}/start-work?agent={agent_name}
+2. Read the context and User's question
+3. Respond helpfully by posting a comment: POST http://localhost:8080/api/tasks/{task_id}/comments
+4. Keep your response focused on what User asked
+5. Call stop-work API: POST http://localhost:8080/api/tasks/{task_id}/stop-work
 
 Respond now.
 """
@@ -1066,10 +1068,17 @@ async def move_task(task_id: int, status: str = None, agent: str = None, reason:
         await manager.broadcast({"type": "action_item_added", "task_id": task_id, "item": action_item})
     
     # AUTO-SPAWN: When moving to In Progress, spawn the assigned agent's session
+    # SKIP if agent already has an active session on this task (avoid re-spawning mid-conversation)
     spawned = False
     if status == "In Progress" and old_status != "In Progress":
         assigned_agent = result.get("agent", "Unassigned")
-        if assigned_agent in AGENT_TO_OPENCLAW_ID and assigned_agent != "User":
+        existing_session = result.get("agent_session_key")
+        
+        if existing_session:
+            # Agent already working - don't re-spawn, just log it
+            log_activity(task_id, "skipped_spawn", "System", 
+                        f"Agent {assigned_agent} already has active session, skipping spawn")
+        elif assigned_agent in AGENT_TO_OPENCLAW_ID and assigned_agent != "User":
             await spawn_agent_session(
                 task_id=task_id,
                 task_title=result["title"],
@@ -1166,9 +1175,26 @@ async def add_comment(task_id: int, comment: CommentCreate):
             "content": comment.content,
             "created_at": now
         }
+        
+        # Auto-clear working_agent when an agent (not User) posts a comment
+        # This ensures the "thinking" indicator clears when agent responds
+        working_agent_cleared = None
+        if comment.agent and comment.agent != "User":
+            task_row = conn.execute("SELECT working_agent FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if task_row and task_row["working_agent"] == comment.agent:
+                conn.execute(
+                    "UPDATE tasks SET working_agent = NULL, updated_at = ? WHERE id = ?",
+                    (now, task_id)
+                )
+                conn.commit()
+                working_agent_cleared = comment.agent
     
     # Broadcast to all clients
     await manager.broadcast({"type": "comment_added", "task_id": task_id, "comment": result})
+    
+    # If working agent was cleared, broadcast work_stopped event
+    if working_agent_cleared:
+        await manager.broadcast({"type": "work_stopped", "task_id": task_id, "agent": working_agent_cleared})
     
     # Check for @mentions in the comment and spawn mentioned agents
     mentions = MENTION_PATTERN.findall(comment.content)

@@ -580,10 +580,22 @@
             border-color: var(--accent);
         }
         
-        /* Thinking indicator - glowing shield */
+        /* Thinking indicator - matches ai-working style with dot + icon */
         .thinking-indicator {
-            font-size: 1.25rem;
-            animation: thinking-pulse 1.5s ease-in-out infinite;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(236, 72, 153, 0.3));
+            border: 1px solid rgba(139, 92, 246, 0.5);
+            border-radius: 8px;
+            animation: ai-glow 2s ease-in-out infinite;
+            box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), inset 0 0 10px rgba(139, 92, 246, 0.1);
+        }
+        
+        .thinking-indicator .ai-working-icon {
+            font-size: 1rem;
+            line-height: 1;
         }
         
         @keyframes thinking-pulse {
@@ -954,6 +966,32 @@
             border-radius: 12px;
             font-size: 0.75rem;
             color: var(--text-muted);
+        }
+        
+        .column-header-left {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .column-sort {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.4rem;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+            outline: none;
+        }
+        
+        .column-sort:hover {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+        
+        .column-sort:focus {
+            border-color: var(--accent);
         }
         
         .column-cards {
@@ -1343,10 +1381,20 @@
             animation: ai-glow 2s ease-in-out infinite;
         }
         
-        .chat-working-indicator .typing-dot {
+        /* Chat working agent item - matches card style */
+        .chat-working-agent {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+        
+        .chat-working-agent .ai-working-dot {
             width: 5px;
             height: 5px;
-            margin-right: 2px;
+        }
+        
+        .chat-working-agent .ai-working-icon {
+            font-size: 0.8rem;
         }
         
         /* Modal - Normal Mode */
@@ -2097,6 +2145,8 @@
         /* Drag and drop */
         .card.dragging { opacity: 0.5; }
         .column.drag-over { background: rgba(0, 180, 216, 0.1); }
+        .card.drag-above { border-top: 2px solid var(--accent); margin-top: -2px; }
+        .card.drag-below { border-bottom: 2px solid var(--accent); margin-bottom: -2px; }
         
         /* Empty state */
         .empty-chat {
@@ -2278,7 +2328,7 @@
                         <button class="new-session-btn" onclick="event.stopPropagation(); createNewSession()" title="New session">+ New</button>
                     </div>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
-                        <span class="thinking-indicator" id="jarvisThinking" style="display: none;">🛡️</span>
+                        <span class="thinking-indicator" id="jarvisThinking" style="display: none;"><span class="ai-working-dot"></span><span class="ai-working-icon">🛡️</span></span>
                         <button class="stop-btn" id="stopSessionBtn" onclick="event.stopPropagation(); stopCurrentSession()" title="Stop this session">■</button>
                         <button class="command-expand-btn" onclick="event.stopPropagation(); toggleCommandFullsize()" title="Fullscreen" id="commandExpandBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 3 14 10"/><polyline points="3 21 10 14"/></svg></button>
                         <button class="command-close-btn" onclick="event.stopPropagation(); collapseCommandBar()">×</button>
@@ -2454,11 +2504,8 @@
                     <div class="chat-header">
                         <span>Conversation</span>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <div class="chat-working-indicator" id="chatWorkingIndicator" style="display: none;">
-                                <span class="typing-dot"></span>
-                                <span class="typing-dot"></span>
-                                <span class="typing-dot"></span>
-                                <span id="chatWorkingText" style="margin-left: 0.25rem; font-size: 0.75rem; color: var(--accent);">thinking...</span>
+                            <div class="chat-working-indicator" id="chatWorkingIndicator" style="display: none;" title="">
+                                <div id="chatWorkingAgents" style="display: flex; gap: 0.25rem; align-items: center;"></div>
                             </div>
                             <button class="stop-btn-mini" id="stopAgentBtn" onclick="stopTaskAgent()" title="Stop agent">■</button>
                             <button class="btn btn-secondary" onclick="toggleTaskDetails()" id="toggleDetailsBtn" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">Hide Details</button>
@@ -2509,6 +2556,9 @@
         let tasks = [];
         let comments = {}; // taskId -> comments array
         let actionItems = {}; // taskId -> action items array
+        let workingAgentsByTask = {}; // taskId -> Set of working agent names (for multi-agent display)
+        let columnSortMode = {}; // status -> sort mode (latest|priority|agent|custom)
+        let customSortOrder = {}; // status -> array of task IDs in custom order
         let pastedImageData = null;
         let theaterMode = false;
         let detailsVisible = true;
@@ -2665,7 +2715,11 @@
             board.innerHTML = '';
             
             config.statuses.forEach(status => {
-                const statusTasks = tasks.filter(t => t.status === status);
+                let statusTasks = tasks.filter(t => t.status === status);
+                const sortMode = columnSortMode[status] || 'priority';
+                
+                // Apply sorting
+                statusTasks = sortTasksForColumn(statusTasks, status, sortMode);
                 
                 const column = document.createElement('div');
                 column.className = 'column';
@@ -2673,7 +2727,15 @@
                 
                 column.innerHTML = `
                     <div class="column-header">
-                        <span>${status}</span>
+                        <div class="column-header-left">
+                            <span>${status}</span>
+                            <select class="column-sort" onchange="setColumnSort('${status}', this.value)" title="Sort by">
+                                <option value="priority" ${sortMode === 'priority' ? 'selected' : ''}>Priority</option>
+                                <option value="latest" ${sortMode === 'latest' ? 'selected' : ''}>Latest</option>
+                                <option value="agent" ${sortMode === 'agent' ? 'selected' : ''}>Agent</option>
+                                <option value="custom" ${sortMode === 'custom' ? 'selected' : ''}>Custom</option>
+                            </select>
+                        </div>
                         <span class="count">${statusTasks.length}</span>
                     </div>
                     <div class="column-cards" 
@@ -2687,17 +2749,80 @@
             });
         }
         
+        function sortTasksForColumn(tasksToSort, status, sortMode) {
+            const sorted = [...tasksToSort];
+            
+            switch (sortMode) {
+                case 'priority':
+                    const priorityOrder = {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3};
+                    sorted.sort((a, b) => (priorityOrder[a.priority] ?? 99) - (priorityOrder[b.priority] ?? 99));
+                    break;
+                    
+                case 'latest':
+                    // Sort by most recent comment or updated_at
+                    sorted.sort((a, b) => {
+                        const aComments = comments[a.id] || [];
+                        const bComments = comments[b.id] || [];
+                        const aLatest = aComments.length > 0 ? aComments[aComments.length - 1].created_at : a.updated_at;
+                        const bLatest = bComments.length > 0 ? bComments[bComments.length - 1].created_at : b.updated_at;
+                        return new Date(bLatest) - new Date(aLatest); // Descending (newest first)
+                    });
+                    break;
+                    
+                case 'agent':
+                    sorted.sort((a, b) => (a.agent || '').localeCompare(b.agent || ''));
+                    break;
+                    
+                case 'custom':
+                    const order = customSortOrder[status] || [];
+                    if (order.length > 0) {
+                        sorted.sort((a, b) => {
+                            const aIdx = order.indexOf(a.id);
+                            const bIdx = order.indexOf(b.id);
+                            // Tasks not in order go to end
+                            const aPos = aIdx === -1 ? 9999 : aIdx;
+                            const bPos = bIdx === -1 ? 9999 : bIdx;
+                            return aPos - bPos;
+                        });
+                    }
+                    break;
+            }
+            
+            return sorted;
+        }
+        
+        function setColumnSort(status, mode) {
+            columnSortMode[status] = mode;
+            // Clear custom order when switching away from custom
+            if (mode !== 'custom') {
+                delete customSortOrder[status];
+            }
+            renderBoard();
+        }
+        
         function renderCard(task) {
             const taskActionItems = actionItems[task.id] || [];
             const openCount = taskActionItems.filter(item => !item.resolved).length;
             const bubbleHtml = openCount > 0 ? `<div class="notification-bubble">${openCount}</div>` : '';
-            const aiWorkingHtml = task.working_agent ? `<div class="ai-working" title="${task.working_agent} is working"><span class="ai-working-dot"></span><span class="ai-working-icon">${getAgentIcon(task.working_agent)}</span></div>` : '';
+            
+            // Get working agents from local tracking OR backend fallback
+            const workingAgents = workingAgentsByTask[task.id] 
+                ? Array.from(workingAgentsByTask[task.id])
+                : (task.working_agent ? [task.working_agent] : []);
+            
+            const aiWorkingHtml = workingAgents.length > 0 
+                ? `<div class="ai-working" title="${workingAgents.join(', ')}">${workingAgents.map(agent => 
+                    `<span class="ai-working-dot"></span><span class="ai-working-icon">${getAgentIcon(agent)}</span>`
+                  ).join('')}</div>` 
+                : '';
             
             return `
                 <div class="card" 
                      draggable="true" 
                      ondragstart="handleDragStart(event, ${task.id})"
                      ondragend="handleDragEnd(event)"
+                     ondragover="handleCardDragOver(event, ${task.id})"
+                     ondrop="handleCardDrop(event, ${task.id}, '${task.status}')"
                      onclick="openEditTaskModal(${task.id})">
                     ${bubbleHtml}
                     ${aiWorkingHtml}
@@ -2728,6 +2853,7 @@
         function handleDragEnd(event) {
             event.target.classList.remove('dragging');
             document.querySelectorAll('.column').forEach(c => c.classList.remove('drag-over'));
+            document.querySelectorAll('.card').forEach(c => c.classList.remove('drag-above'));
         }
         
         function handleDragOver(event) {
@@ -2735,12 +2861,99 @@
             event.currentTarget.closest('.column').classList.add('drag-over');
         }
         
+        function handleCardDragOver(event, taskId) {
+            event.preventDefault();
+            event.stopPropagation();
+            // Show visual indicator of drop position
+            const card = event.currentTarget;
+            const rect = card.getBoundingClientRect();
+            const midY = rect.top + rect.height / 2;
+            
+            // Clear all drag-above indicators
+            document.querySelectorAll('.card').forEach(c => c.classList.remove('drag-above', 'drag-below'));
+            
+            if (event.clientY < midY) {
+                card.classList.add('drag-above');
+            } else {
+                card.classList.add('drag-below');
+            }
+            
+            card.closest('.column').classList.add('drag-over');
+        }
+        
         async function handleDrop(event, newStatus) {
             event.preventDefault();
             document.querySelectorAll('.column').forEach(c => c.classList.remove('drag-over'));
+            document.querySelectorAll('.card').forEach(c => c.classList.remove('drag-above', 'drag-below'));
             
-            if (draggedTaskId) {
-                // Always pass agent=User for UI actions (he's the one using the board)
+            if (!draggedTaskId) return;
+            
+            const draggedTask = tasks.find(t => t.id === draggedTaskId);
+            const oldStatus = draggedTask?.status;
+            
+            // If dropping in same column, switch to custom sort
+            if (oldStatus === newStatus) {
+                columnSortMode[newStatus] = 'custom';
+                // Build custom order from current DOM order
+                const column = document.querySelector(`.column[data-status="${newStatus}"]`);
+                const cardIds = Array.from(column.querySelectorAll('.card')).map(c => {
+                    const onclick = c.getAttribute('onclick');
+                    const match = onclick.match(/openEditTaskModal\((\d+)\)/);
+                    return match ? parseInt(match[1]) : null;
+                }).filter(id => id !== null);
+                customSortOrder[newStatus] = cardIds;
+                renderBoard();
+            } else {
+                // Moving to different column - use API
+                await fetch(`${API}/api/tasks/${draggedTaskId}/move?status=${encodeURIComponent(newStatus)}&agent=User`, { method: 'POST' });
+                await loadTasks();
+                renderBoard();
+            }
+        }
+        
+        async function handleCardDrop(event, targetTaskId, newStatus) {
+            event.preventDefault();
+            event.stopPropagation();
+            document.querySelectorAll('.column').forEach(c => c.classList.remove('drag-over'));
+            document.querySelectorAll('.card').forEach(c => c.classList.remove('drag-above', 'drag-below'));
+            
+            if (!draggedTaskId || draggedTaskId === targetTaskId) return;
+            
+            const draggedTask = tasks.find(t => t.id === draggedTaskId);
+            const oldStatus = draggedTask?.status;
+            
+            // Determine insert position (above or below target)
+            const targetCard = event.currentTarget;
+            const rect = targetCard.getBoundingClientRect();
+            const insertBefore = event.clientY < (rect.top + rect.height / 2);
+            
+            if (oldStatus === newStatus) {
+                // Reordering within same column - switch to custom
+                columnSortMode[newStatus] = 'custom';
+                
+                // Get current visual order
+                const column = document.querySelector(`.column[data-status="${newStatus}"]`);
+                let cardIds = Array.from(column.querySelectorAll('.card')).map(c => {
+                    const onclick = c.getAttribute('onclick');
+                    const match = onclick.match(/openEditTaskModal\((\d+)\)/);
+                    return match ? parseInt(match[1]) : null;
+                }).filter(id => id !== null);
+                
+                // Remove dragged task from its current position
+                cardIds = cardIds.filter(id => id !== draggedTaskId);
+                
+                // Find target position and insert
+                const targetIdx = cardIds.indexOf(targetTaskId);
+                if (insertBefore) {
+                    cardIds.splice(targetIdx, 0, draggedTaskId);
+                } else {
+                    cardIds.splice(targetIdx + 1, 0, draggedTaskId);
+                }
+                
+                customSortOrder[newStatus] = cardIds;
+                renderBoard();
+            } else {
+                // Moving to different column via card drop
                 await fetch(`${API}/api/tasks/${draggedTaskId}/move?status=${encodeURIComponent(newStatus)}&agent=User`, { method: 'POST' });
                 await loadTasks();
                 renderBoard();
@@ -3295,14 +3508,13 @@
         }
         
         let chatWorkingPollInterval = null;
+        let chatWorkingAgents = new Set(); // Track multiple working agents
         
         function showChatWorkingIndicator(agentName) {
-            const indicator = document.getElementById('chatWorkingIndicator');
-            const text = document.getElementById('chatWorkingText');
-            if (indicator && text) {
-                text.textContent = `${agentName || 'Agent'} thinking...`;
-                indicator.style.display = 'flex';
-            }
+            if (!agentName) return;
+            
+            chatWorkingAgents.add(agentName);
+            updateChatWorkingIndicatorUI();
             
             // Start polling as fallback in case WebSocket event is missed
             clearInterval(chatWorkingPollInterval);
@@ -3313,8 +3525,8 @@
                         const taskComments = await fetch(`${API}/api/tasks/${taskId}/comments`).then(r => r.json());
                         const lastComment = taskComments[taskComments.length - 1];
                         if (lastComment && lastComment.agent !== 'User') {
-                            // Agent has responded, hide indicator and stop polling
-                            hideChatWorkingIndicator();
+                            // Agent has responded, hide their indicator
+                            removeChatWorkingAgent(lastComment.agent);
                         }
                     } catch (e) {
                         // Ignore poll errors
@@ -3323,11 +3535,48 @@
             }
         }
         
-        function hideChatWorkingIndicator() {
-            const indicator = document.getElementById('chatWorkingIndicator');
-            if (indicator) {
-                indicator.style.display = 'none';
+        function removeChatWorkingAgent(agentName) {
+            chatWorkingAgents.delete(agentName);
+            updateChatWorkingIndicatorUI();
+            
+            // Stop polling if no agents working
+            if (chatWorkingAgents.size === 0) {
+                clearInterval(chatWorkingPollInterval);
+                chatWorkingPollInterval = null;
             }
+        }
+        
+        function updateChatWorkingIndicatorUI() {
+            const indicator = document.getElementById('chatWorkingIndicator');
+            const agentsContainer = document.getElementById('chatWorkingAgents');
+            
+            if (!indicator || !agentsContainer) return;
+            
+            if (chatWorkingAgents.size === 0) {
+                indicator.style.display = 'none';
+                agentsContainer.innerHTML = '';
+                indicator.title = '';
+                return;
+            }
+            
+            // Build agent icons with dots
+            const agentArray = Array.from(chatWorkingAgents);
+            agentsContainer.innerHTML = agentArray.map(agent => 
+                `<div class="chat-working-agent" title="${agent}">
+                    <span class="ai-working-dot"></span>
+                    <span class="ai-working-icon">${getAgentIcon(agent)}</span>
+                </div>`
+            ).join('');
+            
+            // Set tooltip only (no visible text) - matches card indicator format
+            indicator.title = agentArray.join(', ');
+            
+            indicator.style.display = 'flex';
+        }
+        
+        function hideChatWorkingIndicator() {
+            chatWorkingAgents.clear();
+            updateChatWorkingIndicatorUI();
             // Stop fallback polling
             clearInterval(chatWorkingPollInterval);
             chatWorkingPollInterval = null;
@@ -3532,6 +3781,13 @@
                 }
                 
                 if (data.type === 'work_started') {
+                    // Track working agent for this task (supports multiple)
+                    if (data.task_id && data.agent) {
+                        if (!workingAgentsByTask[data.task_id]) {
+                            workingAgentsByTask[data.task_id] = new Set();
+                        }
+                        workingAgentsByTask[data.task_id].add(data.agent);
+                    }
                     // Refresh board to show AI working indicator on card
                     await loadTasks();
                     renderBoard();
@@ -3543,13 +3799,20 @@
                 }
                 
                 if (data.type === 'work_stopped') {
-                    // Refresh board to hide AI working indicator on card
+                    // Remove agent from tracking (supports multiple)
+                    if (data.task_id && data.agent && workingAgentsByTask[data.task_id]) {
+                        workingAgentsByTask[data.task_id].delete(data.agent);
+                        if (workingAgentsByTask[data.task_id].size === 0) {
+                            delete workingAgentsByTask[data.task_id];
+                        }
+                    }
+                    // Refresh board to update AI working indicator on card
                     await loadTasks();
                     renderBoard();
-                    // Also hide in modal if this task is open
+                    // Also remove specific agent from modal indicator if this task is open
                     const openTaskId = document.getElementById('taskId').value;
-                    if (openTaskId && parseInt(openTaskId) === data.task_id) {
-                        hideChatWorkingIndicator();
+                    if (openTaskId && parseInt(openTaskId) === data.task_id && data.agent) {
+                        removeChatWorkingAgent(data.agent);
                     }
                 }
                 
