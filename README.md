@@ -4,6 +4,14 @@ A real-time Kanban board designed for **multi-agent AI workflows** with [OpenCla
 
 ![Task Board Preview](https://img.shields.io/badge/Status-Production_Ready-green) ![License](https://img.shields.io/badge/License-MIT-blue) ![OpenClaw](https://img.shields.io/badge/OpenClaw-Compatible-purple)
 
+
+https://github.com/user-attachments/assets/104ebd11-c407-4c34-b0f6-0a34027b4d8f
+
+
+
+https://github.com/user-attachments/assets/fc4237c9-c4e5-437d-8638-1a51e8eb6219
+
+
 ---
 
 ## 📋 Changelog
